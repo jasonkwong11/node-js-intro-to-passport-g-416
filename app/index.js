@@ -9,10 +9,36 @@ const ENV = process.env.NODE_ENV || 'development';
 const config = require('../knexfile');
 const db = knex(config[ENV]);
 
+//require Passport and other modules
+//then register the passport middleware
+//with our Express app
+
+const passport = require('passport');
+const session = require('express-session');
+const cookieParser = require('cookie-parser');
+const flash = require('connect-flash');
+// set up Local Strategy: for basic
+//username/password authentication
+const LocalStrategy = require('passport-local').Strategy
+
 // Initialize Express.
 const app = express();
+//activate use of flash messages to pass
+//messages back to client if there's an error
+//during login
+app.use(flash());
+//activate body parser so it can read both
+//JSON input and input from html forms
+app.use(bodyParser.urlencoded({extended: true}));
 app.use(bodyParser.json());
-app.use(passport.initialize());
+//enable app to maintain a session object
+//on our requests (e.g.: req.session)
+app.use(session({secret: 'our secret string'}));
+//activate a parser that can read any cookies
+//sent by the client browser
+app.use(cookieParser());
+//register the passport middleware with express:
+app.use(passport.initialize()); 
 
 // Configure handlebars templates.
 app.engine('handlebars', handlebars({
@@ -21,6 +47,25 @@ app.engine('handlebars', handlebars({
 }));
 app.set('views', path.join(__dirname, '/views'));
 app.set('view engine', 'handlebars');
+
+
+//custom middleware to help us determine
+//whether our user is logged in or not:
+
+//const isAuthenticated = (req, res, done) => {
+//  if (req.session && req.session.passport) {
+//    console.log('user is logged in: ', req.session.passport);
+//    return done();
+//  } 
+//  res.redirect('/login');
+//}
+
+const isAuthenticated = (req, res, done) => {
+  if (req.isAuthenticated()){
+    return done();
+  }
+  res.direct('/login');
+}
 
 // Configure & Initialize Bookshelf & Knex.
 console.log(`Running in environment: ${ENV}`);
@@ -31,9 +76,28 @@ const Comment = require('./models/comment');
 const Post = require('./models/post');
 const User = require('./models/user');
 
+//define specific validation logic for Passport
 
-
-
+passport.use(new LocalStrategy((username, password, done) => {
+  User
+    .forge({ username: username })
+    .fetch()
+    .then((usr) => {
+      if (!usr) {
+        return done(null, false);
+      }
+      usr.validatePassword(password)
+        .then((valid) => {
+          if (!valid){
+            return done(null, false);
+          }
+          return done(null, usr);
+        });
+    })
+    .catch((err) => {
+      return done(err);
+    });
+}));
 
 // ***** Server ***** //
 
@@ -67,7 +131,7 @@ app.post('/user', (req, res) => {
     });
 });
 
-app.get('/posts', (req, res) => {
+app.get('/posts', isAuthenticated, (req, res) => {
   Post
     .collection()
     .fetch()
@@ -123,6 +187,47 @@ app.post('/comment', (req, res) => {
       res.sendStatus(500);
     });
 });
+
+// route for login form with handlebars
+app.get('/login', (req, res) => {
+  res.render('login', { message: req.flash('error') });
+});
+
+//server route where the form data on login
+//form can be sent to validate the user
+//here's where local strategy comes into play
+
+app.post('/login',
+  passport.authenticate('local', {
+    failureRedirect: '/login',
+    failureFlash: true
+  }),
+  function(req, res){
+    res.redirect('/posts');
+  }
+);
+
+//serializeUser and deserializeUser:
+
+passport.serializeUser(function(user, done){
+  done(null, user.id);
+  //on successful authentication, the value
+  //returned by this function is stored
+  // on the session. this value is set on
+  // req.session.passport.user
+});
+
+passport.deserializeUser(function(user, done){
+  User
+    .forge({id: user})
+    .fetch()
+    .then((usr) => {
+      done(null, usr);
+    })
+    .catch((err) => {
+      done(err);
+    })
+})
 
 // Exports for Server Hoisting.
 
